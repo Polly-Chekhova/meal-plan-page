@@ -697,12 +697,11 @@
       </div>
       <div class="subbar">
         <button class="link-inline" id="history">📖 Saved weeks</button>
-        ${dirty ? `<button class="link-inline" id="reset2">Reset to plan</button>` : ""}
       </div>`;
     if (gen)
-      html += `<div class="gen-banner">Showing a <b>reshuffled week</b> — a what-if saved on this phone, not your official plan or grocery list. Tap <b>Reset to plan</b> to go back.</div>`;
+      html += `<div class="gen-banner">Showing a <b>reshuffled week</b> — a what-if saved on this phone, not your official plan or grocery list.</div>`;
     else if (dirty)
-      html += `<div class="gen-banner">You've swapped some meals. <b>Reset to plan</b> to restore the official week.</div>`;
+      html += `<div class="gen-banner">You've swapped some meals — saved on this phone for the week.</div>`;
 
     for (const d of DATA.plan.days) html += dayCard(d.day);
 
@@ -713,8 +712,6 @@
       newWeek.textContent = "Shuffling…";
       setTimeout(() => { overrides = generateWeek(); saveOverrides(); render(); try { window.scrollTo({ top: 0, behavior: "smooth" }); } catch (e) {} }, 20);
     });
-    const reset2 = $("#reset2");
-    if (reset2) reset2.addEventListener("click", () => { overrides = {}; saveOverrides(); render(); });
     const saveW = $("#save-week");
     if (saveW) saveW.addEventListener("click", openSave);
     const hist = $("#history");
