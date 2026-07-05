@@ -515,18 +515,21 @@
         </div>
       </header>`;
 
+    // "Reset to plan" only appears once you've actually changed something.
     const gen = overrides.__mode === "generated";
+    const dirty = Object.keys(overrides).some((k) => k !== "__mode");
     html += `
       <div class="toolbar">
         <button class="btn-new" id="new-week">🎲 New week</button>
-        <button class="btn-ghost" id="reset2">Reset to plan</button>
+        ${dirty ? `<button class="btn-ghost" id="reset2">Reset to plan</button>` : ""}
       </div>`;
     if (gen)
       html += `<div class="gen-banner">Showing a <b>reshuffled week</b> — a what-if saved on this phone, not your official plan or grocery list. Tap <b>Reset to plan</b> to go back.</div>`;
+    else if (dirty)
+      html += `<div class="gen-banner">You've swapped some meals. <b>Reset to plan</b> to restore the official week.</div>`;
 
     for (const d of DATA.plan.days) html += dayCard(d.day);
 
-    html += `<div class="foot"><button class="link-inline" id="reset">Reset all tweaks to the planned week</button></div>`;
     app.innerHTML = html;
 
     const newWeek = $("#new-week");
