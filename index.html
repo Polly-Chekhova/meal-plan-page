@@ -122,6 +122,23 @@
   .btn-inline.solid { background: var(--warn); color: #fff; border-color: var(--warn); }
   .link-inline { background: none; border: none; color: var(--muted); font-size: 12px; text-decoration: underline; cursor: pointer; padding: 0; }
 
+  /* ---- toolbar ---- */
+  .toolbar { display: flex; gap: 8px; align-items: center; margin: 0 0 14px; }
+  .btn-new {
+    flex: 1; font-family: var(--font-ui); font-size: 14px; font-weight: 600; cursor: pointer;
+    background: var(--accent); color: #fff; border: none; border-radius: 11px; padding: 11px 14px;
+  }
+  .btn-new:active { background: var(--accent-deep); }
+  .btn-ghost {
+    font-family: var(--font-ui); font-size: 13px; font-weight: 600; cursor: pointer; color: var(--muted);
+    background: var(--surface); border: 1px solid var(--line); border-radius: 11px; padding: 11px 14px;
+  }
+  .btn-ghost:active { background: var(--paper); }
+  .gen-banner {
+    background: var(--accent-soft); color: var(--accent-deep); border-radius: 11px;
+    padding: 10px 13px; font-size: 12.5px; margin: 0 0 14px; line-height: 1.4;
+  }
+
   /* ---- footer actions ---- */
   .foot { display: flex; justify-content: center; margin-top: 8px; }
 
@@ -299,6 +316,16 @@
 
   const DAY_FULL = { Mon: "Monday", Tue: "Tuesday", Wed: "Wednesday", Thu: "Thursday", Fri: "Friday", Sat: "Saturday", Sun: "Sunday" };
   const SLOT_LABEL = { breakfast: "Breakfast", lunch: "Lunch", dinner: "Dinner" };
+  const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  // Fixed cooking cadence — used to label a freshly generated week.
+  const CADENCE_NOTE = {
+    "Mon:lunch": "L1 batch — Mon–Thu", "Tue:lunch": "L1 leftover", "Wed:lunch": "L1 leftover", "Thu:lunch": "L1 leftover",
+    "Fri:lunch": "L2 batch — Fri–Sun", "Sat:lunch": "L2 leftover", "Sun:lunch": "L2 leftover",
+    "Mon:dinner": "Dinner A — cook tonight", "Tue:dinner": "Dinner A leftover",
+    "Thu:dinner": "Dinner B — cook tonight", "Fri:dinner": "Dinner B leftover",
+    "Sat:dinner": "Dinner C — weekend cook", "Sun:dinner": "Dinner C leftover",
+    "Sun:breakfast": "Sunday breakfast",
+  };
 
   // ---------- utilities ----------
   const $ = (sel, el = document) => el.querySelector(sel);
@@ -339,31 +366,34 @@
     const d = DATA.plan.days.find((x) => x.day === day);
     return d ? d.side : null;
   }
-  // Resolve a slot to { recipe } or { takeaway }.
-  function resolve(day, meal) {
-    const o = overrides[day] && overrides[day][meal];
-    if (o) return { recipe: DATA.recipes[o] };
+  // Resolve a slot to { recipe } or { takeaway }, against a given overrides map
+  // (defaults to the live one; the week generator scores candidates with its own).
+  function resolve(day, meal, ovr) {
+    ovr = ovr || overrides;
+    const o = ovr[day] && ovr[day][meal];
+    if (o) return { recipe: DATA.recipes[o], note: ovr.__mode === "generated" ? CADENCE_NOTE[day + ":" + meal] || "" : "" };
     const p = planSlot(day, meal);
     if (!p || p.takeaway) return { takeaway: true, label: p ? p.label : "—" };
     return { recipe: DATA.recipes[p.id], note: p.note };
   }
-  function resolveSide(day) {
-    const o = overrides[day];
+  function resolveSide(day, ovr) {
+    ovr = ovr || overrides;
+    const o = ovr[day];
     if (o && Object.prototype.hasOwnProperty.call(o, "side")) return o.side; // object or null
     return planSide(day);
   }
-  function isTakeawayDay(day) {
+  function isTakeawayDay(day, ovr) {
     // A day is exempt from the floors only while its dinner is still takeaway.
-    return resolve(day, "dinner").takeaway;
+    return resolve(day, "dinner", ovr).takeaway;
   }
 
-  function dayTotals(day) {
+  function dayTotals(day, ovr) {
     let t = { calories: 0, protein: 0, carbs: 0, fat: 0 };
     for (const meal of ["breakfast", "lunch", "dinner"]) {
-      const r = resolve(day, meal);
+      const r = resolve(day, meal, ovr);
       if (r.recipe) for (const k in t) t[k] += r.recipe[k] || 0;
     }
-    const side = resolveSide(day);
+    const side = resolveSide(day, ovr);
     if (side) for (const k in t) t[k] += side[k] || 0;
     return t;
   }
@@ -372,6 +402,95 @@
     return Object.values(DATA.recipes)
       .filter((r) => r.meal === meal && !r.isBase)
       .sort((a, b) => (b.protein || 0) - (a.protein || 0));
+  }
+
+  // ---------- in-page week generator ----------
+  // Re-picks the whole week from the embedded library, protein-first, respecting the
+  // Mon–Sun cadence and the floors. A personal what-if: saved on this phone, doesn't
+  // touch week-plan.md or the grocery list. "Reset to plan" restores the official plan.
+  const isWeekend = (r) => /crepe|pancake|waffle|french toast|shakshuka/i.test(r.name);
+  function weightedPick(cands, exclude) {
+    const pool = cands.filter((r) => !exclude || !exclude.has(r.id));
+    const use = pool.length ? pool : cands;
+    // Bias toward higher protein, keep randomness for variety.
+    const w = use.map((r) => Math.pow((r.protein || 0) + 4, 2));
+    let total = w.reduce((a, b) => a + b, 0), x = Math.random() * total;
+    for (let i = 0; i < use.length; i++) { x -= w[i]; if (x <= 0) return use[i]; }
+    return use[use.length - 1];
+  }
+  function pickDistinct(cands, n) {
+    const used = new Set(), out = [];
+    let guard = 0;
+    while (out.length < n && guard++ < 300) {
+      const c = weightedPick(cands, used);
+      if (used.has(c.id)) continue;
+      used.add(c.id); out.push(c);
+    }
+    return out;
+  }
+  function bestSideFor(t) {
+    // Choose one side that best closes whichever floor is breached.
+    const needP = t.protein < DATA.meta.floors.protein;
+    const scored = DATA.sides
+      .map((s) => ({ s, gain: needP ? s.protein * 3 + s.calories / 100 : s.calories }))
+      .sort((a, b) => b.gain - a.gain);
+    return scored.length ? scored[0].s : null;
+  }
+  function buildCandidate() {
+    const bk = alternatives("breakfast");
+    const weekdayBk = bk.filter((r) => !isWeekend(r)).length ? bk.filter((r) => !isWeekend(r)) : bk;
+    const weekendBk = bk.filter(isWeekend).length ? bk.filter(isWeekend) : bk;
+    const lunches = pickDistinct(alternatives("lunch"), 2);
+    const dinners = pickDistinct(alternatives("dinner"), 3);
+    const wk = pickDistinct(weekdayBk, Math.min(6, weekdayBk.length));
+    const ovr = {};
+    const set = (day, meal, id) => { (ovr[day] = ovr[day] || {})[meal] = id; };
+    // Breakfasts: Mon–Sat weekday (cycle if fewer than 6 distinct), Sun special.
+    ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].forEach((d, i) => set(d, "breakfast", wk[i % wk.length].id));
+    set("Sun", "breakfast", weightedPick(weekendBk).id);
+    // Lunches: L1 Mon–Thu, L2 Fri–Sun.
+    ["Mon", "Tue", "Wed", "Thu"].forEach((d) => set(d, "lunch", lunches[0].id));
+    ["Fri", "Sat", "Sun"].forEach((d) => set(d, "lunch", lunches[1].id));
+    // Dinners: A Mon+Tue, B Thu+Fri, C Sat+Sun. Wed left as takeaway.
+    ["Mon", "Tue"].forEach((d) => set(d, "dinner", dinners[0].id));
+    ["Thu", "Fri"].forEach((d) => set(d, "dinner", dinners[1].id));
+    ["Sat", "Sun"].forEach((d) => set(d, "dinner", dinners[2].id));
+    ovr.__mode = "generated";
+    // Floor guard: add one side to any full day under a floor.
+    for (const day of DAYS) {
+      if (isTakeawayDay(day, ovr)) continue;
+      const t = dayTotals(day, ovr);
+      if (t.protein < DATA.meta.floors.protein || t.calories < DATA.meta.floors.calories) {
+        const s = bestSideFor(t);
+        if (s) ovr[day].side = s;
+      }
+    }
+    return ovr;
+  }
+  function scoreWeek(ovr) {
+    let score = 0;
+    const seen = new Set();
+    for (const day of DAYS) {
+      if (isTakeawayDay(day, ovr)) continue;
+      const t = dayTotals(day, ovr);
+      score += t.protein >= DATA.meta.floors.protein ? 12 : -(DATA.meta.floors.protein - t.protein);
+      score += t.calories >= DATA.meta.floors.calories ? 5 : -(DATA.meta.floors.calories - t.calories) / 40;
+      score -= Math.abs(t.protein - DATA.meta.targets.protein) * 0.15;
+      score -= Math.abs(t.calories - DATA.meta.targets.calories) * 0.004;
+    }
+    // Reward distinct dinners across the week.
+    for (const day of DAYS) { const r = resolve(day, "dinner", ovr); if (r.recipe) seen.add(r.recipe.id); }
+    score += seen.size * 3;
+    return score;
+  }
+  function generateWeek() {
+    let best = null, bestScore = -Infinity;
+    for (let i = 0; i < 40; i++) {
+      const c = buildCandidate();
+      const s = scoreWeek(c);
+      if (s > bestScore) { bestScore = s; best = c; }
+    }
+    return best;
   }
 
   // ---------- render ----------
@@ -396,10 +515,27 @@
         </div>
       </header>`;
 
+    const gen = overrides.__mode === "generated";
+    html += `
+      <div class="toolbar">
+        <button class="btn-new" id="new-week">🎲 New week</button>
+        <button class="btn-ghost" id="reset2">Reset to plan</button>
+      </div>`;
+    if (gen)
+      html += `<div class="gen-banner">Showing a <b>reshuffled week</b> — a what-if saved on this phone, not your official plan or grocery list. Tap <b>Reset to plan</b> to go back.</div>`;
+
     for (const d of DATA.plan.days) html += dayCard(d.day);
 
     html += `<div class="foot"><button class="link-inline" id="reset">Reset all tweaks to the planned week</button></div>`;
     app.innerHTML = html;
+
+    const newWeek = $("#new-week");
+    if (newWeek) newWeek.addEventListener("click", () => {
+      newWeek.textContent = "Shuffling…";
+      setTimeout(() => { overrides = generateWeek(); saveOverrides(); render(); try { window.scrollTo({ top: 0, behavior: "smooth" }); } catch (e) {} }, 20);
+    });
+    const reset2 = $("#reset2");
+    if (reset2) reset2.addEventListener("click", () => { overrides = {}; saveOverrides(); render(); });
 
     app.querySelectorAll("[data-meal]").forEach((el) => {
       el.addEventListener("click", (e) => {
@@ -480,7 +616,7 @@
 
   function mealRow(day, meal) {
     const r = resolve(day, meal);
-    const swappedTag = overrides[day] && overrides[day][meal] ? " · swapped" : "";
+    const swappedTag = overrides.__mode !== "generated" && overrides[day] && overrides[day][meal] ? " · swapped" : "";
     let main, badge;
     if (r.takeaway) {
       main = `<div class="meal-name takeaway">${esc(r.label || "Takeaway / flex")}</div>`;
