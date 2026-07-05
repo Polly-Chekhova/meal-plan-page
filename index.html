@@ -562,49 +562,84 @@
   }
   const rn = (id) => (DATA.recipes[id] ? DATA.recipes[id].name : "—");
 
-  // ---------- grocery list (built in-browser from the chosen plan) ----------
+  // ---------- grocery list (built in-browser, grouped by product) ----------
   const FRAC = { "¼": 0.25, "½": 0.5, "¾": 0.75, "⅓": 1 / 3, "⅔": 2 / 3, "⅛": 0.125, "⅜": 0.375, "⅝": 0.625, "⅞": 0.875 };
-  function fracToNum(s) {
+  function qnum(s) {
     s = String(s).trim();
+    const m = s.match(/^(\d+)([¼½¾⅓⅔⅛⅜⅝⅞])$/); if (m) return (+m[1]) + FRAC[m[2]];
     if (FRAC[s] != null) return FRAC[s];
     if (/^\d+\s*\/\s*\d+$/.test(s)) { const [a, b] = s.split("/").map(Number); return a / b; }
     return parseFloat(s.replace(",", ".")) || 0;
   }
-  const UNIT = /^(\d+(?:[.,]\d+)?|[¼½¾⅓⅔⅛⅜⅝⅞]|\d+\s*\/\s*\d+)\s*(g|kg|ml|l|tbsp|tbs|tsp|cups?|slices?|cloves?|cans?|tins?|bunch|sprigs?|handful|pinch|stalks?|leaves?)?\b/i;
-  function parseIng(line) {
-    if (/^\s*#{1,6}\s/.test(line)) return null;
-    let s = line.trim().replace(/^[-*]\s*/, "");
-    if (!s || /^\*\*.+\*\*:?$/.test(s)) return null; // bold subheader
-    const paren = s.match(/\(([^()]*)\)\s*$/);
-    const disp = paren ? paren[1].trim() : s.replace(/\([^)]*\)\s*$/, "").replace(UNIT, "").replace(/^[,\s]+/, "").trim();
-    const qm = s.match(UNIT);
-    let qty = null, unit = "";
-    if (qm && qm[1]) { qty = fracToNum(qm[1]); unit = (qm[2] || "").toLowerCase(); }
-    return { qty, unit, key: disp.toLowerCase(), disp, raw: s };
+  const UNIT = /^(\d+[¼½¾⅓⅔⅛⅜⅝⅞]?|[¼½¾⅓⅔⅛⅜⅝⅞]|\d+(?:[.,]\d+)?|\d+\s*\/\s*\d+)\s*(kg|g|ml|l|tbsp|tbs|tsp|cups?|slices?|cloves?|cans?|tins?|bunch|sprigs?|handful|pinch|stalks?|leaves?|portions?)?\b/i;
+  const G_SKIP = /quantities below|double the site|^serves\b/i;
+  const G_PANTRY = /\b(bay leaf|bay|herb|salt|pepper|olive oil|\boil\b|paprika|oregano|thyme|rosemary|cumin|coriander|spice|seasoning|garlic powder|onion powder|sugar|flour|stock|bouillon|soy sauce|tamari|vinegar|mirin|sake|honey|maple|sesame|chilli flakes|cinnamon|mustard|tomato paste|sriracha|fish sauce|hoisin|cornflour|cornstarch|baking|water)\b/i;
+  const G_WEIGHT = { onion: 110, tomato: 120, carrot: 80, celery: 40, cucumber: 200, zucchini: 200, potato: 170, capsicum: 120, eggplant: 250 };
+  const G_KEEP = /\b(lemon|lime|avocado|banana|egg|pita|flatbread|tortilla|chilli|chile|spring onion|mussel)\b/;
+  const G_STRIP = /\b(finely|freshly|roughly|thinly|coarsely|chopped|sliced|diced|minced|grated|julienned|shredded|halved|crushed|ground|cooked|raw|fresh|dried|light|boneless|skinless|large|medium|small|ripe|optional|split|whole|plus|beans?|leaves?|stalks?|cloves?|into|steaks?|fillets?|pieces?|portions?|trimmed|cut|scrubbed|bearded|shelled|thawed|drained|canned|rolled|extra|new|baby|unsalted|melted|softened|juiced|zested|picked)\b/gi;
+  function gName(s) {
+    let t = s.replace(/^_+|_+$/g, "").replace(/^\s*optional\s*:?\s*/i, "");
+    t = t.replace(/\(see[^)]*\)/ig, "").replace(/\[[^\]]*\]\([^)]*\)/g, "").replace(/\([^)]*\)/g, "");
+    t = t.replace(UNIT, "").replace(/^[\s\d¼½¾⅓⅔⅛⅜⅝⅞.,/x×-]+/i, "");
+    t = t.replace(/\bto (serve|season|taste)\b.*/i, "").replace(/\s[—-]\s.*$/, "");
+    return t.trim();
+  }
+  function gCanon(name) {
+    let n = name.toLowerCase().replace(/[^\w\s\/-]/g, " ").replace(G_STRIP, "").replace(/\b(and|with|plus|the|for|of)\b/g, " ").replace(/\s+/g, " ").trim();
+    if (/\bonion\b/.test(n) && !/powder|spring/.test(n)) n = "onion";
+    else if (/\btomato/.test(n) && !/paste|passata|sun/.test(n)) n = "tomato";
+    else if (/\bgarlic\b/.test(n) && !/powder/.test(n)) n = "garlic";
+    else if (/chicken thigh/.test(n)) n = "chicken thigh";
+    else if (/chicken breast/.test(n)) n = "chicken breast";
+    else if (/greek yogurt/.test(n)) n = "greek yogurt light";
+    else if (/mussel/.test(n)) n = "mussels";
+    else if (/chilli|chile/.test(n) && !/flake/.test(n)) n = "chilli";
+    n = n.replace(/\b(\w{3,}?)s\b/, (m, w) => (/ss$/.test(m) ? m : w));
+    return n.trim();
   }
   const gRound = (n) => (Math.abs(n - Math.round(n)) < 0.05 ? String(Math.round(n)) : n.toFixed(1));
+  const UNAME = { x: "", g: " g", ml: " ml", tbsp: " tbsp", tsp: " tsp", slice: " slices", clove: " cloves", can: " cans", bunch: " bunch", handful: " handful", sprig: " sprigs", pinch: " pinch" };
   function buildGrocery(snap) {
     const seen = new Set(), recipes = [];
     for (const d of snap.days) for (const m of ["breakfast", "lunch", "dinner"]) {
       const id = d[m]; if (id && !seen.has(id)) { seen.add(id); recipes.push(DATA.recipes[id]); }
     }
-    const agg = new Map(), misc = [];
+    const prod = new Map(), pantry = new Set();
     for (const r of recipes) for (const line of r.ingredients || []) {
-      const p = parseIng(line); if (!p) continue;
-      if (p.qty != null) {
-        const unit = p.unit || "x", k = p.key + "|" + unit;
-        const e = agg.get(k) || { name: p.disp, unit, qty: 0 }; e.qty += p.qty; agg.set(k, e);
-      } else misc.push(p.disp || p.raw);
+      let s = line.trim().replace(/^[-*]\s*/, "");
+      if (!s || /^\*\*.+\*\*:?$/.test(s) || /^#{1,6}\s/.test(line) || G_SKIP.test(s)) continue;
+      const nm = gName(s), key = gCanon(nm);
+      if (!key || key.length < 2) continue;
+      if (G_PANTRY.test(key) || G_PANTRY.test(nm)) { pantry.add(key); continue; }
+      const qm = s.match(UNIT);
+      let qty = qm && qm[1] ? qnum(qm[1]) : null, unit = qm && qm[2] ? qm[2].toLowerCase() : "";
+      if (unit === "kg") { qty *= 1000; unit = "g"; }
+      if (unit === "l") { qty *= 1000; unit = "ml"; }
+      if (unit === "tbs") unit = "tbsp";
+      if (/^portion/.test(unit)) unit = "";
+      const e = prod.get(key) || { name: key, units: {} };
+      if (qty != null) {
+        if (!unit) {
+          const b = key.replace(/s$/, "");
+          if (G_WEIGHT[b] != null && !G_KEEP.test(key)) e.units.g = (e.units.g || 0) + qty * G_WEIGHT[b];
+          else e.units.x = (e.units.x || 0) + qty;
+        } else e.units[unit] = (e.units[unit] || 0) + qty;
+      } else e.units.some = true;
+      prod.set(key, e);
     }
-    const items = [...agg.values()]
-      .map((e) => (e.unit === "x" ? `${gRound(e.qty)} × ${e.name}` : `${gRound(e.qty)} ${e.unit} ${e.name}`))
-      .sort((a, b) => a.localeCompare(b));
-    return { recipes, items, misc: [...new Set(misc)].sort((a, b) => a.localeCompare(b)) };
+    const products = [...prod.values()].sort((a, b) => a.name.localeCompare(b.name));
+    return { recipes, products, pantry: [...pantry].sort((a, b) => a.localeCompare(b)) };
+  }
+  const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+  function productLine(e) {
+    const parts = Object.entries(e.units).filter(([u, v]) => u !== "some" && v)
+      .map(([u, v]) => (u === "x" ? `${gRound(v)}×` : `${gRound(v)}${UNAME[u] || " " + u}`));
+    return cap(e.name) + (parts.length ? " — " + parts.join(" + ") : "");
   }
   function groceryText(snap, g) {
     let t = `Grocery list — week of ${DATA.meta.generated}\n\n`;
-    t += g.items.map((i) => "- " + i).join("\n");
-    if (g.misc.length) t += "\n\nTo taste / check you have:\n" + g.misc.map((i) => "- " + i).join("\n");
+    t += g.products.map((e) => "- " + productLine(e)).join("\n");
+    if (g.pantry.length) t += "\n\nCheck you have (pantry):\n" + g.pantry.map((i) => "- " + cap(i)).join("\n");
     t += "\n\nPlan:\n" + snap.days.map((d) => `${d.day}: ${rn(d.breakfast)} / ${rn(d.lunch)} / ${d.dinner ? rn(d.dinner) : "takeaway"}`).join("\n");
     return t;
   }
@@ -646,16 +681,16 @@
   function openGrocery() {
     const snap = currentSnapshot();
     const g = buildGrocery(snap);
-    const list = g.items.length ? `<ul class="g-list">${g.items.map((i) => `<li>${esc(i)}</li>`).join("")}</ul>` : '<p class="desc">No ingredients found.</p>';
-    const misc = g.misc.length ? `<div class="rsec-h">To taste / check you have</div><ul class="g-list g-misc">${g.misc.map((i) => `<li>${esc(i)}</li>`).join("")}</ul>` : "";
+    const list = g.products.length ? `<ul class="g-list">${g.products.map((e) => `<li>${esc(productLine(e))}</li>`).join("")}</ul>` : '<p class="desc">No ingredients found.</p>';
+    const pantry = g.pantry.length ? `<div class="rsec-h">Check you have (pantry)</div><ul class="g-list g-misc">${g.pantry.map((i) => `<li>${esc(cap(i))}</li>`).join("")}</ul>` : "";
     const body = `
-      <div class="sort-note">Built from this week's ${g.recipes.length} recipes (one batch each — 4 servings; scale for your household).</div>
+      <div class="sort-note">Grouped by product from this week's ${g.recipes.length} recipes (one batch each — 4 servings; scale for your household).</div>
       <div class="g-actions">
         <button id="g-copy" class="primary">Copy list</button>
         <button id="g-dl">Download</button>
       </div>
       <div class="rsec-h">Shopping list</div>
-      ${list}${misc}`;
+      ${list}${pantry}`;
     const el = openSheet("Shopping list", `Week of ${prettyDate(DATA.meta.generated)}`, body);
     $("#g-copy", el).addEventListener("click", async () => {
       const txt = groceryText(snap, g);
