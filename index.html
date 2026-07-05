@@ -459,7 +459,7 @@
   // ---------- in-page week generator ----------
   // Re-picks the whole week from the embedded library, protein-first, respecting the
   // Mon–Sun cadence and the floors. A personal what-if: saved on this phone, doesn't
-  // touch week-plan.md or the grocery list. "Reset to plan" restores the official plan.
+  // touch week-plan.md or the grocery list.
   const isWeekend = (r) => /crepe|pancake|waffle|french toast|shakshuka/i.test(r.name);
   function weightedPick(cands, exclude) {
     const pool = cands.filter((r) => !exclude || !exclude.has(r.id));
@@ -687,7 +687,7 @@
         </div>
       </header>`;
 
-    // "Reset to plan" only appears once you've actually changed something.
+    // A banner appears once you've reshuffled or swapped something.
     const gen = overrides.__mode === "generated";
     const dirty = Object.keys(overrides).some((k) => k !== "__mode");
     html += `
