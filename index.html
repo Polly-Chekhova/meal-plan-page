@@ -339,6 +339,15 @@
     "Sat:dinner": "Dinner C — weekend cook", "Sun:dinner": "Dinner C leftover",
     "Sun:breakfast": "Sunday breakfast",
   };
+  // Batch groups — the days that eat the same cook as leftovers. Swapping any one of
+  // them re-picks the whole batch. Breakfast is unique per day; Wed dinner is takeaway (solo).
+  const LUNCH_GROUPS = [["Mon", "Tue", "Wed", "Thu"], ["Fri", "Sat", "Sun"]];
+  const DINNER_GROUPS = [["Mon", "Tue"], ["Thu", "Fri"], ["Sat", "Sun"]];
+  function batchGroup(day, meal) {
+    if (meal === "breakfast") return [day];
+    const groups = meal === "lunch" ? LUNCH_GROUPS : DINNER_GROUPS;
+    return groups.find((g) => g.includes(day)) || [day];
+  }
 
   // ---------- utilities ----------
   const $ = (sel, el = document) => el.querySelector(sel);
@@ -369,6 +378,7 @@
     try { localStorage.setItem(STORE_KEY, JSON.stringify(overrides)); } catch (e) {}
   }
   function ov(day) { return overrides[day] || (overrides[day] = {}); }
+  function prune() { for (const d of DAYS) if (overrides[d] && Object.keys(overrides[d]).length === 0) delete overrides[d]; }
 
   // ---------- resolution ----------
   function planSlot(day, meal) {
@@ -384,7 +394,7 @@
   function resolve(day, meal, ovr) {
     ovr = ovr || overrides;
     const o = ovr[day] && ovr[day][meal];
-    if (o) return { recipe: DATA.recipes[o], note: ovr.__mode === "generated" ? CADENCE_NOTE[day + ":" + meal] || "" : "" };
+    if (o) return { recipe: DATA.recipes[o], note: CADENCE_NOTE[day + ":" + meal] || "" };
     const p = planSlot(day, meal);
     if (!p || p.takeaway) return { takeaway: true, label: p ? p.label : "—" };
     return { recipe: DATA.recipes[p.id], note: p.note };
@@ -730,19 +740,24 @@
           <span class="opt-badge">${Math.round(r.calories)} · ${fmt(r.protein)} P</span>
         </button>`;
     }
+    const group = batchGroup(day, meal);
+    const batchNote = group.length > 1
+      ? `It's one batch — this updates all ${group.length} days that eat it (${group[0]}–${group[group.length - 1]}).`
+      : `Saved on this phone for the week; it doesn't change your shopping list.`;
     const planned = planSlot(day, meal);
     const canRevert = overrides[day] && overrides[day][meal];
     const revert = canRevert && planned && !planned.takeaway
       ? `<button class="opt" data-pick="__revert"><div class="opt-main"><div class="opt-name" style="color:var(--accent-deep)">↺ Back to the planned meal</div></div></button>`
       : "";
-    const body = `<div class="sort-note">Alternatives for ${SLOT_LABEL[meal].toLowerCase()}, highest protein first. Your pick is saved on this phone for the week and recomputes the day — it doesn't change your shopping list.</div>${revert}${list}`;
-    const el = openSheet(`Swap ${SLOT_LABEL[meal].toLowerCase()}`, DAY_FULL[day], body);
+    const body = `<div class="sort-note">Alternatives for ${SLOT_LABEL[meal].toLowerCase()}, highest protein first. ${batchNote}</div>${revert}${list}`;
+    const sub = group.length > 1 ? `${SLOT_LABEL[meal]} · ${group[0]}–${group[group.length - 1]} (shared batch)` : `${SLOT_LABEL[meal]} · ${DAY_FULL[day]}`;
+    const el = openSheet(`Swap ${SLOT_LABEL[meal].toLowerCase()}`, sub, body);
     el.querySelectorAll("[data-pick]").forEach((b) =>
       b.addEventListener("click", () => {
         const id = b.dataset.pick;
-        if (id === "__revert") delete ov(day)[meal];
-        else ov(day)[meal] = id;
-        saveOverrides(); closeSheet(); render();
+        if (id === "__revert") group.forEach((d) => delete ov(d)[meal]);
+        else group.forEach((d) => (ov(d)[meal] = id));
+        prune(); saveOverrides(); closeSheet(); render();
       })
     );
   }
