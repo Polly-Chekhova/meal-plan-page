@@ -147,10 +147,37 @@
     background: var(--surface); border: 1px solid var(--line); border-radius: 11px; padding: 11px 14px;
   }
   .btn-ghost:active { background: var(--paper); }
+  .btn-save {
+    flex: 1; font-family: var(--font-ui); font-size: 14px; font-weight: 600; cursor: pointer;
+    background: var(--accent-deep); color: #fff; border: none; border-radius: 11px; padding: 11px 14px;
+  }
+  .btn-save:active { background: #24462f; }
+  .subbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: -4px 0 14px; }
   .gen-banner {
     background: var(--accent-soft); color: var(--accent-deep); border-radius: 11px;
     padding: 10px 13px; font-size: 12.5px; margin: 0 0 14px; line-height: 1.4;
   }
+
+  /* ---- grocery / history ---- */
+  .g-actions { display: flex; gap: 8px; margin: 4px 0 16px; }
+  .g-actions button {
+    flex: 1; font-family: var(--font-ui); font-size: 13px; font-weight: 600; cursor: pointer;
+    border-radius: 10px; padding: 10px; border: 1px solid var(--line); background: var(--surface); color: var(--ink);
+  }
+  .g-actions button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .g-actions button:disabled { opacity: .5; }
+  .g-list { list-style: none; margin: 0 0 4px; padding: 0; }
+  .g-list li { font-size: 13.5px; padding: 6px 0; border-bottom: 1px solid var(--line-soft); font-variant-numeric: tabular-nums; }
+  .g-misc li { color: var(--muted); }
+  .toast {
+    position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom)); transform: translateX(-50%);
+    background: var(--ink); color: #fff; font-size: 13px; padding: 10px 16px; border-radius: 999px; z-index: 60;
+    box-shadow: var(--shadow); max-width: 90%; text-align: center;
+  }
+  .hist-item { padding: 12px 0; border-bottom: 1px solid var(--line-soft); }
+  .hist-date { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--accent); font-weight: 700; }
+  .hist-picks { font-size: 13px; margin-top: 4px; line-height: 1.5; }
+  .hist-picks b { font-family: var(--font-head); font-weight: 600; }
 
   /* ---- footer actions ---- */
   .foot { display: flex; justify-content: center; margin-top: 8px; }
@@ -458,8 +485,12 @@
     const bk = alternatives("breakfast");
     const weekdayBk = bk.filter((r) => !isWeekend(r)).length ? bk.filter((r) => !isWeekend(r)) : bk;
     const weekendBk = bk.filter(isWeekend).length ? bk.filter(isWeekend) : bk;
-    const lunches = pickDistinct(alternatives("lunch"), 2);
-    const dinners = pickDistinct(alternatives("dinner"), 3);
+    // Once-a-month rule: avoid lunches/dinners used in the last 4 saved weeks.
+    const avoid = recentUsedIds();
+    const lp = alternatives("lunch").filter((r) => !avoid.has(r.id));
+    const dp = alternatives("dinner").filter((r) => !avoid.has(r.id));
+    const lunches = pickDistinct(lp.length >= 2 ? lp : alternatives("lunch"), 2);
+    const dinners = pickDistinct(dp.length >= 3 ? dp : alternatives("dinner"), 3);
     const wk = pickDistinct(weekdayBk, Math.min(6, weekdayBk.length));
     const ovr = {};
     const set = (day, meal, id) => { (ovr[day] = ovr[day] || {})[meal] = id; };
@@ -503,6 +534,137 @@
     return best;
   }
 
+  // ---------- saved-week log (phone history) ----------
+  const LOG_KEY = "mealplan:log";
+  function loadLog() { try { return JSON.parse(localStorage.getItem(LOG_KEY)) || []; } catch (e) { return []; } }
+  function saveLog(l) { try { localStorage.setItem(LOG_KEY, JSON.stringify(l.slice(-12))); } catch (e) {} }
+  // Lunch + dinner recipe ids used in the last 4 saved weeks (breakfasts exempt — pool too small).
+  function recentUsedIds() {
+    const ids = new Set();
+    for (const w of loadLog().slice(-4))
+      for (const d of w.plan.days) { if (d.lunch) ids.add(d.lunch); if (d.dinner) ids.add(d.dinner); }
+    return ids;
+  }
+  function currentSnapshot() {
+    return {
+      days: DAYS.map((day) => {
+        const o = { day };
+        for (const m of ["breakfast", "lunch", "dinner"]) { const r = resolve(day, m); o[m] = r.recipe ? r.recipe.id : null; }
+        return o;
+      }),
+    };
+  }
+  const rn = (id) => (DATA.recipes[id] ? DATA.recipes[id].name : "—");
+
+  // ---------- grocery list (built in-browser from the chosen plan) ----------
+  const FRAC = { "¼": 0.25, "½": 0.5, "¾": 0.75, "⅓": 1 / 3, "⅔": 2 / 3, "⅛": 0.125, "⅜": 0.375, "⅝": 0.625, "⅞": 0.875 };
+  function fracToNum(s) {
+    s = String(s).trim();
+    if (FRAC[s] != null) return FRAC[s];
+    if (/^\d+\s*\/\s*\d+$/.test(s)) { const [a, b] = s.split("/").map(Number); return a / b; }
+    return parseFloat(s.replace(",", ".")) || 0;
+  }
+  const UNIT = /^(\d+(?:[.,]\d+)?|[¼½¾⅓⅔⅛⅜⅝⅞]|\d+\s*\/\s*\d+)\s*(g|kg|ml|l|tbsp|tbs|tsp|cups?|slices?|cloves?|cans?|tins?|bunch|sprigs?|handful|pinch|stalks?|leaves?)?\b/i;
+  function parseIng(line) {
+    if (/^\s*#{1,6}\s/.test(line)) return null;
+    let s = line.trim().replace(/^[-*]\s*/, "");
+    if (!s || /^\*\*.+\*\*:?$/.test(s)) return null; // bold subheader
+    const paren = s.match(/\(([^()]*)\)\s*$/);
+    const disp = paren ? paren[1].trim() : s.replace(/\([^)]*\)\s*$/, "").replace(UNIT, "").replace(/^[,\s]+/, "").trim();
+    const qm = s.match(UNIT);
+    let qty = null, unit = "";
+    if (qm && qm[1]) { qty = fracToNum(qm[1]); unit = (qm[2] || "").toLowerCase(); }
+    return { qty, unit, key: disp.toLowerCase(), disp, raw: s };
+  }
+  const gRound = (n) => (Math.abs(n - Math.round(n)) < 0.05 ? String(Math.round(n)) : n.toFixed(1));
+  function buildGrocery(snap) {
+    const seen = new Set(), recipes = [];
+    for (const d of snap.days) for (const m of ["breakfast", "lunch", "dinner"]) {
+      const id = d[m]; if (id && !seen.has(id)) { seen.add(id); recipes.push(DATA.recipes[id]); }
+    }
+    const agg = new Map(), misc = [];
+    for (const r of recipes) for (const line of r.ingredients || []) {
+      const p = parseIng(line); if (!p) continue;
+      if (p.qty != null) {
+        const unit = p.unit || "x", k = p.key + "|" + unit;
+        const e = agg.get(k) || { name: p.disp, unit, qty: 0 }; e.qty += p.qty; agg.set(k, e);
+      } else misc.push(p.disp || p.raw);
+    }
+    const items = [...agg.values()]
+      .map((e) => (e.unit === "x" ? `${gRound(e.qty)} × ${e.name}` : `${gRound(e.qty)} ${e.unit} ${e.name}`))
+      .sort((a, b) => a.localeCompare(b));
+    return { recipes, items, misc: [...new Set(misc)].sort((a, b) => a.localeCompare(b)) };
+  }
+  function groceryText(snap, g) {
+    let t = `Grocery list — week of ${DATA.meta.generated}\n\n`;
+    t += g.items.map((i) => "- " + i).join("\n");
+    if (g.misc.length) t += "\n\nTo taste / check you have:\n" + g.misc.map((i) => "- " + i).join("\n");
+    t += "\n\nPlan:\n" + snap.days.map((d) => `${d.day}: ${rn(d.breakfast)} / ${rn(d.lunch)} / ${d.dinner ? rn(d.dinner) : "takeaway"}`).join("\n");
+    return t;
+  }
+
+  function toast(msg) {
+    const el = document.createElement("div");
+    el.className = "toast"; el.textContent = msg; document.body.appendChild(el);
+    setTimeout(() => el.remove(), 2600);
+  }
+  function download(name, text) {
+    try {
+      const url = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+      const a = document.createElement("a"); a.href = url; a.download = name; a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e) { toast("Download not supported here — use Copy"); }
+  }
+
+  function openSave() {
+    const snap = currentSnapshot();
+    const g = buildGrocery(snap);
+    const list = g.items.length ? `<ul class="g-list">${g.items.map((i) => `<li>${esc(i)}</li>`).join("")}</ul>` : "";
+    const misc = g.misc.length ? `<div class="rsec-h">To taste / check you have</div><ul class="g-list g-misc">${g.misc.map((i) => `<li>${esc(i)}</li>`).join("")}</ul>` : "";
+    const body = `
+      <div class="sort-note">Grocery list built from this week's ${g.recipes.length} recipes (one batch each — 4 servings; scale for your household). Saving files it in your phone's history and keeps its lunches &amp; dinners out of the next 4 weeks' shuffles.</div>
+      <div class="g-actions">
+        <button id="g-save" class="primary">Save to history</button>
+        <button id="g-copy">Copy list</button>
+        <button id="g-dl">Download</button>
+      </div>
+      <div class="rsec-h">Shopping list</div>
+      ${list || '<p class="desc">No ingredients found.</p>'}
+      ${misc}`;
+    const el = openSheet("Save week & grocery list", `Week of ${prettyDate(DATA.meta.generated)}`, body);
+    $("#g-copy", el).addEventListener("click", async () => {
+      const txt = groceryText(snap, g);
+      try { await navigator.clipboard.writeText(txt); toast("Grocery list copied"); }
+      catch (e) { download("grocery-list.txt", txt); }
+    });
+    $("#g-dl", el).addEventListener("click", () => download(`grocery-${DATA.meta.generated}.txt`, groceryText(snap, g)));
+    $("#g-save", el).addEventListener("click", (e) => {
+      const log = loadLog();
+      const picks = { lunches: uniqNames(snap, "lunch"), dinners: uniqNames(snap, "dinner") };
+      log.push({ savedAt: new Date().toISOString().slice(0, 10), weekKey: WEEK, plan: snap, picks });
+      saveLog(log);
+      e.target.disabled = true; e.target.textContent = "Saved ✓";
+      toast("Week saved — its meals won't repeat for a month");
+    });
+  }
+  function uniqNames(snap, meal) {
+    const s = new Set();
+    for (const d of snap.days) if (d[meal]) s.add(rn(d[meal]));
+    return [...s];
+  }
+
+  function openHistory() {
+    const log = loadLog().slice().reverse();
+    const body = log.length
+      ? log.map((w) => `
+          <div class="hist-item">
+            <div class="hist-date">Saved ${esc(w.savedAt)}</div>
+            <div class="hist-picks"><b>Lunches:</b> ${esc((w.picks?.lunches || []).join(", "))}<br><b>Dinners:</b> ${esc((w.picks?.dinners || []).join(", "))}</div>
+          </div>`).join("")
+      : `<p class="desc">No saved weeks yet. Tap <b>Save &amp; shop</b> on a plan to start your history — saved lunches &amp; dinners then sit out for a month.</p>`;
+    openSheet("Saved weeks", log.length ? `${log.length} in your history` : "", body);
+  }
+
   // ---------- render ----------
   function render() {
     const app = $("#app");
@@ -531,7 +693,11 @@
     html += `
       <div class="toolbar">
         <button class="btn-new" id="new-week">🎲 New week</button>
-        ${dirty ? `<button class="btn-ghost" id="reset2">Reset to plan</button>` : ""}
+        <button class="btn-save" id="save-week">✓ Save &amp; shop</button>
+      </div>
+      <div class="subbar">
+        <button class="link-inline" id="history">📖 Saved weeks</button>
+        ${dirty ? `<button class="link-inline" id="reset2">Reset to plan</button>` : ""}
       </div>`;
     if (gen)
       html += `<div class="gen-banner">Showing a <b>reshuffled week</b> — a what-if saved on this phone, not your official plan or grocery list. Tap <b>Reset to plan</b> to go back.</div>`;
@@ -549,6 +715,10 @@
     });
     const reset2 = $("#reset2");
     if (reset2) reset2.addEventListener("click", () => { overrides = {}; saveOverrides(); render(); });
+    const saveW = $("#save-week");
+    if (saveW) saveW.addEventListener("click", openSave);
+    const hist = $("#history");
+    if (hist) hist.addEventListener("click", openHistory);
 
     app.querySelectorAll("[data-meal]").forEach((el) => {
       el.addEventListener("click", (e) => {
