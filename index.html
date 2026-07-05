@@ -714,7 +714,19 @@
             <div class="hist-picks"><b>Lunches:</b> ${esc((w.picks?.lunches || []).join(", "))}<br><b>Dinners:</b> ${esc((w.picks?.dinners || []).join(", "))}</div>
           </div>`).join("")
       : `<p class="desc">No saved weeks yet. Tap <b>Save week</b> to start your history — saved lunches &amp; dinners then sit out for a month.</p>`;
-    openSheet("Saved weeks", log.length ? `${log.length} in your history` : "", body);
+    const clear = `<div class="g-actions" style="margin-top:20px"><button id="hist-clear">🗑 Clear all saved data on this phone</button></div>`;
+    const el = openSheet("Saved weeks", log.length ? `${log.length} in your history` : "", body + clear);
+    const cb = $("#hist-clear", el);
+    if (cb) cb.addEventListener("click", () => {
+      if (typeof window.confirm === "function" && !window.confirm("Clear all saved weeks and this week's tweaks from this phone? This can't be undone.")) return;
+      try {
+        for (const k of Object.keys(localStorage)) if (k.indexOf("mealplan:") === 0 && k !== GATE_KEY) localStorage.removeItem(k);
+      } catch (e) {}
+      overrides = {};
+      closeSheet();
+      render();
+      toast("Saved data cleared from this phone");
+    });
   }
 
   // ---------- render ----------
