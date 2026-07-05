@@ -152,6 +152,12 @@
     background: var(--accent-deep); color: #fff; border: none; border-radius: 11px; padding: 11px 14px;
   }
   .btn-save:active { background: #24462f; }
+  .btn-shop {
+    width: 100%; font-family: var(--font-ui); font-size: 14px; font-weight: 600; cursor: pointer;
+    background: var(--accent-soft); color: var(--accent-deep); border: 1px solid var(--accent-soft);
+    border-radius: 11px; padding: 12px 14px; margin: 0 0 14px;
+  }
+  .btn-shop:active { background: #dbe7db; }
   .subbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: -4px 0 14px; }
   .gen-banner {
     background: var(--accent-soft); color: var(--accent-deep); border-radius: 11px;
@@ -616,36 +622,47 @@
     } catch (e) { toast("Download not supported here — use Copy"); }
   }
 
-  function openSave() {
+  function planEq(a, b) {
+    if (!a || !b) return false;
+    for (const day of DAYS) {
+      const x = a.days.find((z) => z.day === day) || {}, y = b.days.find((z) => z.day === day) || {};
+      for (const m of ["breakfast", "lunch", "dinner"]) if ((x[m] || null) !== (y[m] || null)) return false;
+    }
+    return true;
+  }
+  function isCurrentSaved() {
+    const log = loadLog();
+    return log.length ? planEq(currentSnapshot(), log[log.length - 1].plan) : false;
+  }
+  function saveWeek() {
+    if (isCurrentSaved()) { toast("This week is already saved"); return; }
+    const snap = currentSnapshot();
+    const log = loadLog();
+    log.push({ savedAt: new Date().toISOString().slice(0, 10), weekKey: WEEK, plan: snap, picks: { lunches: uniqNames(snap, "lunch"), dinners: uniqNames(snap, "dinner") } });
+    saveLog(log);
+    toast("Week saved — now generate your shopping list");
+    render();
+  }
+  function openGrocery() {
     const snap = currentSnapshot();
     const g = buildGrocery(snap);
-    const list = g.items.length ? `<ul class="g-list">${g.items.map((i) => `<li>${esc(i)}</li>`).join("")}</ul>` : "";
+    const list = g.items.length ? `<ul class="g-list">${g.items.map((i) => `<li>${esc(i)}</li>`).join("")}</ul>` : '<p class="desc">No ingredients found.</p>';
     const misc = g.misc.length ? `<div class="rsec-h">To taste / check you have</div><ul class="g-list g-misc">${g.misc.map((i) => `<li>${esc(i)}</li>`).join("")}</ul>` : "";
     const body = `
-      <div class="sort-note">Grocery list built from this week's ${g.recipes.length} recipes (one batch each — 4 servings; scale for your household). Saving files it in your phone's history and keeps its lunches &amp; dinners out of the next 4 weeks' shuffles.</div>
+      <div class="sort-note">Built from this week's ${g.recipes.length} recipes (one batch each — 4 servings; scale for your household).</div>
       <div class="g-actions">
-        <button id="g-save" class="primary">Save to history</button>
-        <button id="g-copy">Copy list</button>
+        <button id="g-copy" class="primary">Copy list</button>
         <button id="g-dl">Download</button>
       </div>
       <div class="rsec-h">Shopping list</div>
-      ${list || '<p class="desc">No ingredients found.</p>'}
-      ${misc}`;
-    const el = openSheet("Save week & grocery list", `Week of ${prettyDate(DATA.meta.generated)}`, body);
+      ${list}${misc}`;
+    const el = openSheet("Shopping list", `Week of ${prettyDate(DATA.meta.generated)}`, body);
     $("#g-copy", el).addEventListener("click", async () => {
       const txt = groceryText(snap, g);
-      try { await navigator.clipboard.writeText(txt); toast("Grocery list copied"); }
-      catch (e) { download("grocery-list.txt", txt); }
+      try { await navigator.clipboard.writeText(txt); toast("Shopping list copied"); }
+      catch (e) { download("shopping-list.txt", txt); }
     });
-    $("#g-dl", el).addEventListener("click", () => download(`grocery-${DATA.meta.generated}.txt`, groceryText(snap, g)));
-    $("#g-save", el).addEventListener("click", (e) => {
-      const log = loadLog();
-      const picks = { lunches: uniqNames(snap, "lunch"), dinners: uniqNames(snap, "dinner") };
-      log.push({ savedAt: new Date().toISOString().slice(0, 10), weekKey: WEEK, plan: snap, picks });
-      saveLog(log);
-      e.target.disabled = true; e.target.textContent = "Saved ✓";
-      toast("Week saved — its meals won't repeat for a month");
-    });
+    $("#g-dl", el).addEventListener("click", () => download(`shopping-${DATA.meta.generated}.txt`, groceryText(snap, g)));
   }
   function uniqNames(snap, meal) {
     const s = new Set();
@@ -661,7 +678,7 @@
             <div class="hist-date">Saved ${esc(w.savedAt)}</div>
             <div class="hist-picks"><b>Lunches:</b> ${esc((w.picks?.lunches || []).join(", "))}<br><b>Dinners:</b> ${esc((w.picks?.dinners || []).join(", "))}</div>
           </div>`).join("")
-      : `<p class="desc">No saved weeks yet. Tap <b>Save &amp; shop</b> on a plan to start your history — saved lunches &amp; dinners then sit out for a month.</p>`;
+      : `<p class="desc">No saved weeks yet. Tap <b>Save week</b> to start your history — saved lunches &amp; dinners then sit out for a month.</p>`;
     openSheet("Saved weeks", log.length ? `${log.length} in your history` : "", body);
   }
 
@@ -687,21 +704,17 @@
         </div>
       </header>`;
 
-    // A banner appears once you've reshuffled or swapped something.
-    const gen = overrides.__mode === "generated";
-    const dirty = Object.keys(overrides).some((k) => k !== "__mode");
+    // "Generate shopping list" appears only once the current week has been saved.
+    const saved = isCurrentSaved();
     html += `
       <div class="toolbar">
         <button class="btn-new" id="new-week">🎲 New week</button>
-        <button class="btn-save" id="save-week">✓ Save &amp; shop</button>
+        <button class="btn-save" id="save-week">✓ Save week</button>
       </div>
+      ${saved ? `<button class="btn-shop" id="shopping">🛒 Generate shopping list</button>` : ""}
       <div class="subbar">
         <button class="link-inline" id="history">📖 Saved weeks</button>
       </div>`;
-    if (gen)
-      html += `<div class="gen-banner">Showing a <b>reshuffled week</b> — a what-if saved on this phone, not your official plan or grocery list.</div>`;
-    else if (dirty)
-      html += `<div class="gen-banner">You've swapped some meals — saved on this phone for the week.</div>`;
 
     for (const d of DATA.plan.days) html += dayCard(d.day);
 
@@ -713,7 +726,9 @@
       setTimeout(() => { overrides = generateWeek(); saveOverrides(); render(); try { window.scrollTo({ top: 0, behavior: "smooth" }); } catch (e) {} }, 20);
     });
     const saveW = $("#save-week");
-    if (saveW) saveW.addEventListener("click", openSave);
+    if (saveW) saveW.addEventListener("click", saveWeek);
+    const shop = $("#shopping");
+    if (shop) shop.addEventListener("click", openGrocery);
     const hist = $("#history");
     if (hist) hist.addEventListener("click", openHistory);
 
